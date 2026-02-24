@@ -2,7 +2,7 @@
 
 一款磁盘空间可视化软件，旨在将磁盘内各文件夹所占空间以直观的方式展示出来，帮助使用者更好的了解磁盘空间的使用情况。
 
-<img width="1643" height="1345" alt="image" src="https://github.com/user-attachments/assets/cc7c1f43-1802-4867-b85e-ecc1d3500f01" />
+<img width="2213" height="1495" alt="微信图片_2026-02-24_141314_591" src="https://github.com/user-attachments/assets/d96c2abd-585c-49a3-96ee-c9126f056d38" />
 
 
 ## 一、文件结构
@@ -62,4 +62,5 @@ py main.py
 
 
 满意或者觉得我做的还行欢迎Star哦！谢谢哦！
+
 
