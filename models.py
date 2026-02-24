@@ -47,6 +47,7 @@ class ScanOptions:
     calculate_hash: bool = False
     exclude_patterns: List[str] = field(default_factory=list)
     max_depth: Optional[int] = None
+    collect_file_details: bool = True
 
 
 @dataclass

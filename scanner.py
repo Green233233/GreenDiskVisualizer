@@ -42,101 +42,153 @@ def scan_path(
 ) -> ScanResult:
     """
     基于 ScanOptions 扫描磁盘路径，返回 ScanResult。
-    为兼容 Windows 7，仅使用标准库，不做 MFT 级优化。
+
+    使用 os.scandir() 进行迭代遍历。在 Windows 上 entry.stat() 利用
+    FindFirstFile/FindNextFile 缓存的元数据，无需额外 I/O，显著快于
+    os.walk() + os.stat() 的组合。
+
+    当 options.collect_file_details 为 False 时（快速扫描），不为每个文件
+    创建 FileInfo，而是按一级目录聚合大小，大幅降低内存占用，同时保留
+    准确的总量统计。
     """
     start_ts = time.time()
-    files: List[FileInfo] = []
     error_count = 0
-
-    # 统计用
-    file_type_stats = {}
+    file_type_stats: dict = {}
     file_count = 0
     folder_count = 0
     largest_file: FileInfo | None = None
     scanned_size = 0
 
-    # 磁盘容量信息（使用标准库）
     try:
-        total_size, used_size, free_size = shutil.disk_usage(options.path)
-        total_size = int(total_size)
-        used_size = int(used_size)
-        free_size = int(free_size)
+        disk_usage = shutil.disk_usage(options.path)
+        total_size = int(disk_usage[0])
+        used_size = int(disk_usage[1])
+        free_size = int(disk_usage[2])
     except Exception:
-        # 回退：如果无法获取，使用 0
         total_size = used_size = free_size = 0
 
-    root_depth = options.path.rstrip("\\/").count(os.sep)
+    root_path = options.path.rstrip("\\/")
+    root_len = len(root_path)
+    root_sep_count = root_path.count(os.sep)
 
-    for dirpath, dirnames, filenames in os.walk(options.path, followlinks=options.follow_symlinks):
-        # 深度限制
+    collect_details = options.collect_file_details
+    files: List[FileInfo] = []
+    size_by_component: dict[str, int] = {}
+
+    # 迭代式目录遍历（栈），避免递归深度限制
+    stack = [options.path]
+
+    while stack:
+        current_dir = stack.pop()
+
         if options.max_depth is not None:
-            current_depth = dirpath.rstrip("\\/").count(os.sep) - root_depth
-            if current_depth > options.max_depth:
-                dirnames[:] = []
+            depth = current_dir.rstrip("\\/").count(os.sep) - root_sep_count
+            if depth > options.max_depth:
                 continue
 
-        # 目录排除
-        dirnames[:] = [d for d in dirnames if not _match_exclude(os.path.join(dirpath, d), options.exclude_patterns)]
+        try:
+            it = os.scandir(current_dir)
+        except (PermissionError, OSError):
+            error_count += 1
+            continue
 
-        # 统计目录
-        for d in dirnames:
-            folder_count += 1
+        subdirs: List[str] = []
 
-        # 处理文件
-        for name in filenames:
-            full_path = os.path.join(dirpath, name)
-            if _match_exclude(full_path, options.exclude_patterns):
-                continue
-            try:
-                st = os.stat(full_path, follow_symlinks=options.follow_symlinks)
-            except Exception:
-                error_count += 1
-                continue
+        with it:
+            for entry in it:
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=options.follow_symlinks)
+                except OSError:
+                    error_count += 1
+                    continue
 
-            is_dir = stat.S_ISDIR(st.st_mode)
-            size = int(st.st_size)
-            create_time = datetime.fromtimestamp(st.st_ctime)
-            modify_time = datetime.fromtimestamp(st.st_mtime)
-            access_time = datetime.fromtimestamp(st.st_atime)
+                if is_dir:
+                    if not _match_exclude(entry.path, options.exclude_patterns):
+                        folder_count += 1
+                        subdirs.append(entry.path)
+                    continue
 
-            ext = os.path.splitext(name)[1].lower() or "unknown"
-            permissions = stat.filemode(st.st_mode)
-            owner = str(st.st_uid) if hasattr(st, "st_uid") else "unknown"
+                if _match_exclude(entry.path, options.exclude_patterns):
+                    continue
 
-            fi = FileInfo(
-                path=full_path,
-                name=name,
-                size=size,
-                create_time=create_time,
-                modify_time=modify_time,
-                access_time=access_time,
-                file_type=ext,
-                is_directory=is_dir,
-                permissions=permissions,
-                owner=owner,
-            )
-            files.append(fi)
-            file_count += 1
-            scanned_size += size
+                try:
+                    st = entry.stat(follow_symlinks=options.follow_symlinks)
+                except (PermissionError, OSError):
+                    error_count += 1
+                    continue
 
-            # 最大文件
-            if not is_dir and (largest_file is None or fi.size > largest_file.size):
-                largest_file = fi
+                if stat.S_ISDIR(st.st_mode):
+                    continue
 
-            # 文件类型统计
-            stat_entry = file_type_stats.setdefault(
-                ext,
-                {"total_size": 0, "file_count": 0},
-            )
-            stat_entry["total_size"] += size
-            stat_entry["file_count"] += 1
+                size = int(st.st_size)
+                name = entry.name
+                ext = os.path.splitext(name)[1].lower() or "unknown"
 
-        # 每处理完一个目录，更新一次进度
+                file_count += 1
+                scanned_size += size
+
+                type_entry = file_type_stats.setdefault(
+                    ext, {"total_size": 0, "file_count": 0})
+                type_entry["total_size"] += size
+                type_entry["file_count"] += 1
+
+                if collect_details:
+                    fi = FileInfo(
+                        path=entry.path,
+                        name=name,
+                        size=size,
+                        create_time=datetime.fromtimestamp(st.st_ctime),
+                        modify_time=datetime.fromtimestamp(st.st_mtime),
+                        access_time=datetime.fromtimestamp(st.st_atime),
+                        file_type=ext,
+                        is_directory=False,
+                        permissions=stat.filemode(st.st_mode),
+                        owner=str(st.st_uid) if hasattr(st, "st_uid") else "unknown",
+                    )
+                    files.append(fi)
+                    if largest_file is None or size > largest_file.size:
+                        largest_file = fi
+                else:
+                    rel = entry.path[root_len:].lstrip("\\/")
+                    sep_pos = rel.find("\\")
+                    if sep_pos < 0:
+                        sep_pos = rel.find("/")
+                    component = rel[:sep_pos] if sep_pos >= 0 else rel
+                    size_by_component[component] = (
+                        size_by_component.get(component, 0) + size)
+
+                    if largest_file is None or size > largest_file.size:
+                        largest_file = FileInfo(
+                            path=entry.path, name=name, size=size,
+                            create_time=datetime.fromtimestamp(st.st_ctime),
+                            modify_time=datetime.fromtimestamp(st.st_mtime),
+                            access_time=datetime.fromtimestamp(st.st_atime),
+                            file_type=ext, is_directory=False,
+                            permissions="", owner="",
+                        )
+
+        stack.extend(subdirs)
+
         if progress_callback is not None:
             ratio = 0.0
             if total_size > 0 and scanned_size > 0:
                 ratio = min(0.999, scanned_size / total_size)
-            progress_callback(file_count, folder_count, dirpath, ratio)
+            progress_callback(file_count, folder_count, current_dir, ratio)
+
+    # 聚合模式：将每个一级目录的总大小封装为合成 FileInfo
+    if not collect_details:
+        now = datetime.now()
+        for component, comp_size in sorted(
+            size_by_component.items(), key=lambda x: x[1], reverse=True
+        ):
+            files.append(FileInfo(
+                path=root_path + "\\" + component,
+                name=component,
+                size=comp_size,
+                create_time=now, modify_time=now, access_time=now,
+                file_type="directory", is_directory=True,
+                permissions="", owner="",
+            ))
 
     end_ts = time.time()
     scan_time = datetime.now()
@@ -161,9 +213,7 @@ def scan_path(
         error_count=error_count,
     )
 
-    # 结束时再推送一次 100% 进度
     if progress_callback is not None:
         progress_callback(file_count, folder_count, options.path, 1.0)
 
     return result
-
