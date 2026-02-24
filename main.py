@@ -83,7 +83,7 @@ class App(tk.Tk):
         c.create_text(sw // 2, 125,
                        text="\u78c1\u76d8\u7a7a\u95f4\u53ef\u89c6\u5316\u5de5\u5177",
                        fill="#e0e0e0", font=("Segoe UI", 12))
-        c.create_text(sw // 2, 170, text="alpha v0.0.1",
+        c.create_text(sw // 2, 170, text="Alpha v0.1.0",
                        fill="#7f8c8d", font=("Segoe UI", 8))
 
         bar_x, bar_w = 60, sw - 120
@@ -132,7 +132,7 @@ class App(tk.Tk):
     def _init_main_ui(self) -> None:
         self._update_splash_progress(0.10, "\u6b63\u5728\u521b\u5efa\u7a97\u53e3...")
 
-        self.title("Green \u78c1\u76d8\u7a7a\u95f4\u53ef\u89c6\u5316\u5de5\u5177 alpha v0.0.1")
+        self.title("Green \u78c1\u76d8\u7a7a\u95f4\u53ef\u89c6\u5316\u5de5\u5177 Alpha v0.1.0")
         self.geometry("1000x700")
 
         self._current_thread: threading.Thread | None = None

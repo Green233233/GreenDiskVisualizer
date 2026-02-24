@@ -1,5 +1,5 @@
 @echo off
-rem Simple launcher for Green Disk Visualizer (alpha v0.0.1)
+rem Simple launcher for Green Disk Visualizer (Alpha v0.1.0)
 cd /d "%~dp0"
 
 rem Prefer pythonw (no console window) over python
