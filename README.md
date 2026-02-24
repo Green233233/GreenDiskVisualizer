@@ -33,6 +33,7 @@
 
 需要 Python 3.8 及以上版本。
 
+下载源码或克隆仓库后，
 双击 `run_visualizer.bat`，或使用命令行：
 
 ```bash
@@ -44,9 +45,9 @@ python main.py
 
 arm64平台和x86平台需要自行从源码构建可执行文件：
 
-1. 确保已安装 Python 3.8+
-2. 双击 `build.bat`，等待打包完成
-3. 生成的 `GreenDiskVisualizer.exe` 位于 `dist` 文件夹中
+1. 安装 Python 3.8或更新版本，下载源码；
+2. 双击 `build.bat`，等待打包完成；
+3. 生成的 `GreenDiskVisualizer.exe` 位于 `dist` 文件夹中；
 
 该 `.exe` 文件可复制到同平台任何 Windows 7+ 电脑上直接运行，无需安装 Python。
 
