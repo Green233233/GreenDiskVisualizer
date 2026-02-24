@@ -1,7 +1,7 @@
 # Green 磁盘空间可视化工具
 
 一款磁盘空间可视化软件，旨在将磁盘内各文件夹所占空间以直观的方式展示出来，帮助使用者更好的了解磁盘空间的使用情况。
-<img width="2213" height="1495" alt="image" src="https://github.com/user-attachments/assets/2cec8f97-8bac-4a51-a485-a430042bf653" />
+<img width="2213" height="1495" alt="微信图片_2026-02-24_141314_591" src="https://github.com/user-attachments/assets/943c5cd8-600f-4b8a-b899-f593396af0df" />
 
 
 
@@ -62,5 +62,6 @@ py main.py
 
 
 满意或者觉得我做的还行欢迎Star哦！谢谢哦！
+
 
 
