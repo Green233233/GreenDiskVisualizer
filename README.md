@@ -6,12 +6,12 @@
 
 
 ## 一、文件结构
-`main.py`：程序入口文件  
-`scanner.py`：磁盘扫描主文件  
-`treemap.py`：treemap算法可视化展示文件  
-`models.py`：数据模型定义文件  
-`requirements.txt`：依赖说明 ~~（现在没用任何依赖 其实这玩意不要也行~~  
-`run_visualizer.bat`一键运行批处理文件  
+ `main.py`：程序入口文件  
+ `scanner.py`：磁盘扫描主文件  
+ `treemap.py`：treemap算法可视化展示文件  
+ `models.py`：数据模型定义文件  
+ `requirements.txt`：依赖说明 ~~（现在没用任何依赖 其实这玩意不要也行...）~~  
+ `run_visualizer.bat`：一键运行批处理文件  
 
 ## 二、运行环境
 
