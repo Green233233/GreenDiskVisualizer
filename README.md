@@ -40,7 +40,7 @@ python main.py
 使用 `py` 启动：
 
 ```bash
-cd 文件所在木兰
+cd 文件所在目录
 py main.py
 ```
 
