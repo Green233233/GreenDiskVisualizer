@@ -25,8 +25,9 @@
 
 ### 方式一：直接运行 .exe
 
-在项目的 Release 页面下载最新版本的 `GreenDiskVisualizer.exe`，双击即可运行。  
-无需安装 Python 或其他软件。
+在项目的 Release 页面下载最新版本的 `GreenDiskVisualizer.exe`，双击即可运行.  
+（仅amd64平台，问就是找不到那么多设备TAT...其余平台请按照方式三自行构建）  
+无需安装 Python 或其他软件。 
 
 ### 方式二：从源码运行
 
@@ -41,13 +42,13 @@ python main.py
 
 ### 方式三：自行打包构建 .exe
 
-如果需要自行从源码构建可执行文件：
+arm64平台和x86平台需要自行从源码构建可执行文件：
 
 1. 确保已安装 Python 3.8+
 2. 双击 `build.bat`，等待打包完成
 3. 生成的 `GreenDiskVisualizer.exe` 位于 `dist` 文件夹中
 
-该 `.exe` 文件可复制到任何 Windows 7+ 电脑上直接运行，无需安装 Python。
+该 `.exe` 文件可复制到同平台任何 Windows 7+ 电脑上直接运行，无需安装 Python。
 
 ## 四、主要功能
 
