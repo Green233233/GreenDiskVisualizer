@@ -44,6 +44,7 @@ class App(tk.Tk):
 
         self._current_thread: threading.Thread | None = None
         self._scan_result: ScanResult | None = None
+        self._resize_after_id: str | None = None
 
         # 扫描进度相关状态（由后台线程更新，UI 轮询显示）
         self._progress_files: int = 0
@@ -251,8 +252,7 @@ class App(tk.Tk):
         if not result.files:
             return
 
-        # 统计顶级目录大小
-        size_by_root = {}
+        size_by_root: dict[str, int] = {}
         root_path = result.stats.disk_path.rstrip("\\/")
         root_len = len(root_path)
         for fi in result.files:
@@ -261,21 +261,37 @@ class App(tk.Tk):
             size_by_root.setdefault(root_component, 0)
             size_by_root[root_component] += fi.size
 
-        items = sorted(size_by_root.items(), key=lambda x: x[1], reverse=True)[:50]
-        if not items:
+        sorted_items = sorted(size_by_root.items(), key=lambda x: x[1], reverse=True)[:50]
+        if not sorted_items:
             return
 
-        # 计算画布大小
+        total_size = sum(s for _, s in sorted_items)
+        if total_size <= 0:
+            return
+
+        MIN_RATIO = 0.015
+        main_items: list[tuple[str, int]] = []
+        other_size = 0
+        other_count = 0
+        for component, size in sorted_items:
+            if size / total_size >= MIN_RATIO:
+                full_path = root_path + "\\" + component
+                main_items.append((full_path, size))
+            else:
+                other_size += size
+                other_count += 1
+        if other_count > 0 and other_size > 0:
+            main_items.append((f"其他 ({other_count} 个文件夹)", other_size))
+
         width = max(self.canvas.winfo_width(), 800)
         height = max(self.canvas.winfo_height(), 500)
 
         nodes: List[TreemapNode] = build_treemap(
-            [(label, size, None) for label, size in items],
+            [(label, size, None) for label, size in main_items],
             width=width,
             height=height,
         )
 
-        # 使用较为柔和的配色，避免过于鲜艳
         colors = [
             "#4e79a7",
             "#a0cbe8",
@@ -293,33 +309,52 @@ class App(tk.Tk):
             color = colors[i % len(colors)]
             x0, y0 = node.x, node.y
             x1, y1 = node.x + node.width, node.y + node.height
-            self.canvas.create_rectangle(
-                x0,
-                y0,
-                x1,
-                y1,
-                fill=color,
-                outline="#404040",
-            )
-            # 仅在面积足够大时绘制文字，避免重叠
-            if node.width > 40 and node.height > 16:
-                label = f"{node.label}"
+            self.canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="#404040")
+
+            bw = node.width
+            bh = node.height
+            size_text = self._format_size(int(node.size))
+            pad = 5
+            if bw > 100 and bh > 48:
+                max_chars = max(4, int((bw - pad * 2) / 8))
+                display_label = node.label if len(node.label) <= max_chars else node.label[:max_chars - 2] + ".."
                 self.canvas.create_text(
-                    x0 + 4,
-                    y0 + 8,
-                    anchor="w",
-                    text=label,
-                    fill="#ffffff",
-                    font=("Segoe UI", 8),
+                    x0 + pad, y0 + pad, anchor="nw",
+                    text=display_label, fill="#ffffff", font=("Segoe UI", 9, "bold"),
+                )
+                self.canvas.create_text(
+                    x0 + pad, y0 + pad + 22, anchor="nw",
+                    text=size_text, fill="#dddddd", font=("Segoe UI", 8),
+                )
+            elif bw > 50 and bh > 22:
+                max_chars = max(3, int((bw - 8) / 7))
+                display_label = node.label if len(node.label) <= max_chars else node.label[:max_chars - 2] + ".."
+                self.canvas.create_text(
+                    x0 + 4, y0 + 4, anchor="nw",
+                    text=display_label, fill="#ffffff", font=("Segoe UI", 7),
+                )
+            elif bw > 24 and bh > 14:
+                max_chars = max(2, int((bw - 4) / 6))
+                short = node.label if len(node.label) <= max_chars else node.label[:max_chars - 2] + ".."
+                self.canvas.create_text(
+                    x0 + 2, y0 + 2, anchor="nw",
+                    text=short, fill="#cccccc", font=("Segoe UI", 6),
                 )
 
     def _on_canvas_configure(self, event: tk.Event) -> None:  # type: ignore[type-arg]
-        """窗口或画布尺寸变化时，重新根据当前大小绘制 treemap。"""
+        """窗口或画布尺寸变化时，防抖后重新绘制 treemap，避免拖动时密集重绘导致卡顿。"""
         if self._scan_result is None:
             return
         if event.width < 100 or event.height < 100:
             return
-        self._draw_treemap(self._scan_result)
+        if self._resize_after_id is not None:
+            self.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.after(150, self._deferred_redraw)
+
+    def _deferred_redraw(self) -> None:
+        self._resize_after_id = None
+        if self._scan_result is not None:
+            self._draw_treemap(self._scan_result)
 
     @staticmethod
     def _format_size(size: int) -> str:
