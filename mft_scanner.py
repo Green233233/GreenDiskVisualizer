@@ -10,8 +10,11 @@ Falls back gracefully when unavailable.
 
 import ctypes
 import ctypes.wintypes as wt
+import gc
 import os
+import stat
 import struct
+import sys
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Callable, Tuple
@@ -121,10 +124,10 @@ _NTFS_ROOT_REF = 5
 def _enumerate_mft_entries(
     handle,
     progress_callback: Optional[Callable] = None,
-) -> Dict[int, Tuple[int, str, bool]]:
-    """Enumerate all MFT entries via FSCTL_ENUM_USN_DATA.
+) -> Dict[int, Tuple[int, str]]:
+    """Enumerate directory entries from MFT via FSCTL_ENUM_USN_DATA.
 
-    Returns {file_ref: (parent_ref, name, is_directory)}.
+    Returns {dir_ref: (parent_ref, name)} for directories only (saves memory).
     Calls *progress_callback* periodically during enumeration so the UI
     stays responsive and can display status updates.
     """
@@ -137,7 +140,7 @@ def _enumerate_mft_entries(
     buf = ctypes.create_string_buffer(buf_size)
     br = ctypes.c_ulong(0)
 
-    entries: Dict[int, Tuple[int, str, bool]] = {}
+    entries: Dict[int, Tuple[int, str]] = {}
     batch_count = 0
 
     while True:
@@ -175,8 +178,8 @@ def _enumerate_mft_entries(
                     "utf-16-le", errors="replace")
                 is_dir = bool(file_attrs & FILE_ATTRIBUTE_DIRECTORY)
                 is_reparse = bool(file_attrs & FILE_ATTRIBUTE_REPARSE_POINT)
-                if not is_reparse:
-                    entries[file_ref] = (parent_ref, name, is_dir)
+                if not is_reparse and is_dir:
+                    entries[file_ref] = (parent_ref, sys.intern(name))
 
             offset += rec_len
 
@@ -186,35 +189,53 @@ def _enumerate_mft_entries(
         if progress_callback and batch_count % 8 == 0:
             progress_callback(
                 0, 0,
-                f"正在读取MFT文件表... ({len(entries)} 条记录)",
+                f"正在读取MFT文件表... ({len(entries)} 个目录)",
                 0.01)
 
     return entries
 
 
-def _build_dir_paths(
-    entries: Dict[int, Tuple[int, str, bool]],
+def _build_dir_paths_compact(
+    entries: Dict[int, Tuple[int, str]],
     root_path: str,
-) -> Dict[int, str]:
-    """BFS from NTFS root to build full paths for every directory."""
+) -> Tuple[Dict[int, Tuple[int, str]], str]:
+    """BFS from NTFS root, return compact (parent_ref, name) per dir, no full paths."""
     children_of: Dict[int, List[Tuple[int, str]]] = defaultdict(list)
-    for ref, (parent_ref, name, is_dir) in entries.items():
-        if is_dir:
-            children_of[parent_ref].append((ref, name))
+    for ref, (parent_ref, name) in entries.items():
+        children_of[parent_ref].append((ref, name))
 
-    dir_paths: Dict[int, str] = {_NTFS_ROOT_REF: root_path.rstrip("\\/")}
-    queue: List[Tuple[int, str]] = [(_NTFS_ROOT_REF, dir_paths[_NTFS_ROOT_REF])]
+    root_path = root_path.rstrip("\\/")
+    compact: Dict[int, Tuple[int, str]] = {}
+    queue: List[Tuple[int, int, str]] = [(_NTFS_ROOT_REF, _NTFS_ROOT_REF, "")]
 
     while queue:
-        parent_ref, parent_path = queue.pop(0)
-        for child_ref, child_name in children_of.get(parent_ref, []):
+        ref, parent_ref, name = queue.pop(0)
+        if ref != _NTFS_ROOT_REF:
+            compact[ref] = (parent_ref, sys.intern(name))
+        for child_ref, child_name in children_of.get(ref, []):
             if child_name.startswith("$"):
                 continue
-            child_path = parent_path + "\\" + child_name
-            dir_paths[child_ref] = child_path
-            queue.append((child_ref, child_path))
+            queue.append((child_ref, ref, sys.intern(child_name)))
 
-    return dir_paths
+    return compact, root_path
+
+
+def _get_dir_full_path(
+    ref: int,
+    compact: Dict[int, Tuple[int, str]],
+    root_path: str,
+) -> str:
+    """Resolve full path from compact (parent_ref, name) map. O(depth) per call."""
+    if ref == _NTFS_ROOT_REF:
+        return root_path
+    parts: List[str] = []
+    r = ref
+    while r in compact:
+        parent_ref, name = compact[r]
+        parts.append(name)
+        r = parent_ref
+    parts.reverse()
+    return root_path + "\\" + "\\".join(parts)
 
 
 def _match_exclude(path: str, patterns: List[str]) -> bool:
@@ -275,15 +296,15 @@ def scan_mft(
         if progress_callback:
             progress_callback(
                 0, 0,
-                f"正在构建目录结构... ({len(entries)} 条记录)",
+                f"正在构建目录结构... ({len(entries)} 个目录)",
                 0.02)
 
-        dir_paths = _build_dir_paths(entries, path)
-        folder_count = len(dir_paths) - 1
-
-        total_dirs = max(len(dir_paths), 1)
+        dir_compact, root_path = _build_dir_paths_compact(entries, path)
+        del entries
+        gc.collect()
+        folder_count = len(dir_compact)
+        total_dirs = max(folder_count + 1, 1)
         processed_dirs = 0
-        root_path = path.rstrip("\\/")
         root_len = len(root_path)
 
         if progress_callback:
@@ -292,7 +313,9 @@ def scan_mft(
                 f"开始扫描文件大小... ({folder_count} 个目录)",
                 0.03)
 
-        for dir_ref, dir_path in dir_paths.items():
+        all_dir_refs = [_NTFS_ROOT_REF] + list(dir_compact.keys())
+        for dir_ref in all_dir_refs:
+            dir_path = _get_dir_full_path(dir_ref, dir_compact, root_path)
             if _match_exclude(dir_path, exclude_patterns):
                 processed_dirs += 1
                 continue
@@ -301,11 +324,11 @@ def scan_mft(
                 with os.scandir(dir_path) as it:
                     for entry in it:
                         try:
-                            if not entry.is_file(follow_symlinks=False):
-                                continue
                             st = entry.stat(follow_symlinks=False)
                         except OSError:
                             error_count += 1
+                            continue
+                        if not stat.S_ISREG(st.st_mode):
                             continue
 
                         size = int(st.st_size)

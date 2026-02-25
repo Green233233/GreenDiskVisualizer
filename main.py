@@ -57,7 +57,7 @@ _FONT_SIZES = [8, 7, 6, 6, 5]
 _MIN_BLOCK_W = [60, 50, 40, 30, 24]
 _MIN_BLOCK_H = [45, 38, 30, 24, 18]
 
-_VERSION = "Alpha v0.2.1"
+_VERSION = "Alpha v0.2.3"
 
 
 def _hsl_to_hex(h: float, s: float, l: float) -> str:

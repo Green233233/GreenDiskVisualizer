@@ -18,9 +18,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem Read version from main.py (e.g. "Alpha v0.2.1" -> "Alpha_v0.2.1")
-set "VER_FNAME=Alpha_v0.2.1"
-for /f "tokens=2 delims=^" %%a in ('findstr "_VERSION" main.py 2^>nul') do set "VER=%%a"
+rem Read version from main.py (e.g. "Alpha v0.2.3" -> "Alpha_v0.2.3")，只匹配赋值行
+set "VER_FNAME=Alpha_v0.2.3"
+for /f "tokens=2 delims=^" %%a in ('findstr /c:"_VERSION = " main.py 2^>nul') do set "VER=%%a"
 if defined VER set "VER_FNAME=%VER: =_%"
 
 rem Clean previous outputs
