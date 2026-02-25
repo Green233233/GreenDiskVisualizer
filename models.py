@@ -58,4 +58,6 @@ class ScanResult:
     stats: DiskStats
     scan_duration_ms: int
     error_count: int
+    hierarchy: Dict[str, Dict] = field(default_factory=dict)
+    scan_method: str = "scandir"
 

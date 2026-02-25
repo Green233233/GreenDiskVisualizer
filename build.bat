@@ -1,17 +1,5 @@
 @echo off
-chcp 65001 >nul 2>nul
-rem ============================================================
-rem  Green 磁盘空间可视化工具 - 多架构一键打包脚本
-rem  自动检测已安装的 Python 架构 (x86/amd64/arm64)，
-rem  为每个架构分别构建独立 .exe 可执行文件。
-rem
-rem  前提条件：
-rem    - 安装 Windows Python Launcher (py.exe)
-rem    - 安装目标架构的 Python 3.8+，例如：
-rem        amd64 : python.org 下载 "Windows installer (64-bit)"
-rem        x86   : python.org 下载 "Windows installer (32-bit)"
-rem        arm64 : python.org 下载 "Windows installer (ARM64)"
-rem ============================================================
+setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
 
 echo.
@@ -20,124 +8,150 @@ echo   Green Disk Visualizer - Multi-Arch Build Tool
 echo  =====================================================
 echo.
 
-rem ── 检测 py launcher ────────────────────────────────────
+rem Check Python Launcher
 where py >nul 2>nul
-if %errorlevel% neq 0 (
-    echo  [ERROR] 未找到 Python Launcher (py.exe)。
-    echo          请从 python.org 安装 Python 时勾选 "py launcher"。
+if errorlevel 1 (
+    echo  [ERROR] Python Launcher ^(py.exe^) not found.
+    echo          Install Python from python.org and enable "py launcher".
     echo.
     pause
     exit /b 1
 )
 
-rem ── 清理旧构建 ──────────────────────────────────────────
-echo  [CLEAN] 正在清理旧构建文件...
+rem Read version from main.py (e.g. "Alpha v0.2.1" -> "Alpha_v0.2.1")
+set "VER_FNAME=Alpha_v0.2.1"
+for /f "tokens=2 delims=^" %%a in ('findstr "_VERSION" main.py 2^>nul') do set "VER=%%a"
+if defined VER set "VER_FNAME=%VER: =_%"
+
+rem Clean previous outputs
+echo  [CLEAN] Removing previous build outputs...
 if exist build rmdir /s /q build >nul 2>nul
 if exist dist  rmdir /s /q dist  >nul 2>nul
 for %%f in (*.spec) do del /f /q "%%f" >nul 2>nul
-echo          清理完成。
+echo          Done.
 echo.
 
-set BUILD_COUNT=0
-set BUILD_SUCCESS=
+rem 从 icon.png 生成 icon.ico（exe 图标 + 窗口图标）
+set "ICON_ICO="
+if exist "icon.png" (
+    echo  [ICON] Generating icon.ico from icon.png...
+    py -m pip install Pillow --quiet --disable-pip-version-check >nul 2>nul
+    py build_icon_ico.py >nul 2>nul
+    if exist "icon.ico" set "ICON_ICO=1" & echo          icon.ico created.
+)
 
-rem ── 依次尝试三种架构 ────────────────────────────────────
+set BUILD_COUNT=0
+
+rem Try all target architectures
 call :try_build "amd64" "-3-64"
 call :try_build "x86"   "-3-32"
 call :try_build "arm64" "-3-arm64"
 
-rem ── 汇总结果 ────────────────────────────────────────────
 echo.
 echo  =====================================================
 if %BUILD_COUNT%==0 (
-    echo   未成功构建任何架构！
-    echo   请确认已安装至少一个架构的 Python 3.8+。
+    echo   No architecture was successfully built.
+    echo   Make sure at least one Python 3.8+ target is installed.
     echo  =====================================================
     pause
     exit /b 1
 )
 
-echo   构建完成！成功构建 %BUILD_COUNT% 个架构：
+echo   Build completed. Successful targets: %BUILD_COUNT%
 echo.
-echo   输出目录: dist\
+echo   Output folder: dist\
 echo.
-if exist "dist\GreenDiskVisualizer_amd64.exe" (
-    echo     GreenDiskVisualizer_amd64.exe   (64 位 Intel/AMD)
+if exist "dist\GreenDiskVisualizer_%VER_FNAME%_amd64.exe" (
+    echo     GreenDiskVisualizer_%VER_FNAME%_amd64.exe   ^(64-bit Intel/AMD^)
 )
-if exist "dist\GreenDiskVisualizer_x86.exe" (
-    echo     GreenDiskVisualizer_x86.exe     (32 位 Intel/AMD)
+if exist "dist\GreenDiskVisualizer_%VER_FNAME%_x86.exe" (
+    echo     GreenDiskVisualizer_%VER_FNAME%_x86.exe     ^(32-bit Intel/AMD^)
 )
-if exist "dist\GreenDiskVisualizer_arm64.exe" (
-    echo     GreenDiskVisualizer_arm64.exe   (64 位 ARM)
+if exist "dist\GreenDiskVisualizer_%VER_FNAME%_arm64.exe" (
+    echo     GreenDiskVisualizer_%VER_FNAME%_arm64.exe   ^(64-bit ARM^)
 )
 echo.
-echo   以上文件可在对应架构的 Windows 7+ 电脑上直接运行，
-echo   无需安装 Python 或任何其他软件。
 echo  =====================================================
 echo.
 pause
 exit /b 0
 
-
-rem ============================================================
-rem  子例程：尝试用指定架构的 Python 构建
-rem  参数: %~1 = 架构名 (amd64/x86/arm64)
-rem        %~2 = py launcher 参数 (-3-64/-3-32/-3-arm64)
-rem ============================================================
 :try_build
-set ARCH=%~1
-set PY_FLAG=%~2
+set "ARCH=%~1"
+set "PY_FLAG=%~2"
+set "EXPECTED_BITS="
+if /I "%ARCH%"=="amd64" set "EXPECTED_BITS=64"
+if /I "%ARCH%"=="x86" set "EXPECTED_BITS=32"
+if /I "%ARCH%"=="arm64" set "EXPECTED_BITS=64"
 
-echo  ──────────────────────────────────────────────────────
-echo  [%ARCH%] 正在检测 Python %PY_FLAG% ...
+echo  -----------------------------------------------------
+echo  [%ARCH%] Checking Python %PY_FLAG% ...
 
-rem 测试该架构的 Python 是否存在
-py %PY_FLAG% -c "import sys; print(f'Python {sys.version}')" >nul 2>nul
-if %errorlevel% neq 0 (
-    echo  [%ARCH%] 未安装，跳过。
+set "PY_CHECK="
+for /f "delims=" %%I in ('py %PY_FLAG% -c "import struct, platform; print('PY_OK ' + str(struct.calcsize('P')*8) + ' ' + platform.machine())" 2^>^&1') do (
+    set "PY_CHECK=%%I"
+)
+echo "%PY_CHECK%" | findstr /c:"PY_OK " >nul
+if errorlevel 1 (
+    echo  [%ARCH%] Not installed, skipped.
     echo.
     goto :eof
 )
 
-rem 显示检测到的版本信息
-echo  [%ARCH%] 检测到:
-py %PY_FLAG% -c "import sys, struct; print(f'         Python {sys.version}'); print(f'         {struct.calcsize(\"P\")*8}-bit')"
+if defined EXPECTED_BITS (
+    echo "%PY_CHECK%" | findstr /c:"PY_OK %EXPECTED_BITS% " >nul
+    if errorlevel 1 (
+        echo  [%ARCH%] Found runtime does not match expected %EXPECTED_BITS%-bit, skipped.
+        echo.
+        goto :eof
+    )
+)
 
-rem 安装 PyInstaller
-echo  [%ARCH%] 正在安装 PyInstaller...
+echo  [%ARCH%] Found and matched:
+py %PY_FLAG% -c "import sys, struct, platform; print('         Python ' + sys.version); print('         ' + str(struct.calcsize('P')*8) + '-bit ' + platform.machine())"
+
+echo  [%ARCH%] Installing/updating PyInstaller...
 py %PY_FLAG% -m pip install pyinstaller --quiet --disable-pip-version-check >nul 2>nul
-if %errorlevel% neq 0 (
-    echo  [%ARCH%] PyInstaller 安装失败，跳过。
+if errorlevel 1 (
+    echo  [%ARCH%] Failed to install PyInstaller, skipped.
     echo.
     goto :eof
 )
 
-rem 清理该架构的临时文件
 if exist "build_%ARCH%" rmdir /s /q "build_%ARCH%" >nul 2>nul
 
-rem 执行打包
-echo  [%ARCH%] 正在打包（可能需要 1-2 分钟）...
+echo  [%ARCH%] Building executable ^(1-2 minutes^)...
+set "BUILD_LOG=build_%ARCH%_log.txt"
+set "ICON_ARGS="
+if defined ICON_ICO if exist "icon.ico" (
+    set "ICON_ARGS=--icon=%~dp0icon.ico --add-data ""%~dp0icon.png;."" --add-data ""%~dp0icon.ico;."""
+)
 py %PY_FLAG% -m PyInstaller ^
     --onefile ^
     --noconsole ^
-    --name "GreenDiskVisualizer_%ARCH%" ^
+    --hidden-import mft_scanner ^
+    --name "GreenDiskVisualizer_%VER_FNAME%_%ARCH%" ^
     --distpath "dist" ^
     --workpath "build_%ARCH%" ^
     --specpath "build_%ARCH%" ^
     --clean ^
-    main.py >nul 2>&1
+    %ICON_ARGS% ^
+    main.py >"%BUILD_LOG%" 2>&1
 
-if %errorlevel% neq 0 (
-    echo  [%ARCH%] 打包失败！
+if errorlevel 1 (
+    echo  [%ARCH%] Build failed. Build log:
+    echo  -----------------------------------------------------
+    type "%BUILD_LOG%" 2>nul
+    echo  -----------------------------------------------------
+    if exist "%BUILD_LOG%" del /f /q "%BUILD_LOG%" 2>nul
     echo.
     goto :eof
 )
+if exist "%BUILD_LOG%" del /f /q "%BUILD_LOG%" 2>nul
 
-echo  [%ARCH%] 打包成功 -^> dist\GreenDiskVisualizer_%ARCH%.exe
+echo  [%ARCH%] Build succeeded: dist\GreenDiskVisualizer_%VER_FNAME%_%ARCH%.exe
 echo.
 
-rem 清理临时构建目录
 if exist "build_%ARCH%" rmdir /s /q "build_%ARCH%" >nul 2>nul
-
 set /a BUILD_COUNT+=1
 goto :eof
