@@ -16,9 +16,10 @@
  `requirements.txt`：依赖说明  
  `run_visualizer.bat`：开发环境一键运行批处理文件  
  `build.bat`：一键打包脚本，将源码打包为独立 `.exe` 可执行文件  
- `build_icon_ico.py`：将`.png`格式的图标转换为`.ico`格式
- `mft_scanner.py`：MFT读取和扫描文件
- `icon.ico`和`icon.png`：图标文件
+ `build_icon_ico.py`：将`.png`格式的图标转换为`.ico`格式  
+ `mft_scanner.py`：MFT读取和扫描文件  
+ `icon.ico`和`icon.png`：图标文件  
+  
 ## 二、运行环境
 
 **操作系统**：Windows 7及更新版本（暂时未针对Linux和macOS进行适配）  
@@ -70,6 +71,7 @@ arm64平台和x86平台需要自行从源码构建可执行文件：
 3.本工具**无删除文件功能**，清理文件请自行定位删除。  
 
 满意或者觉得我做的还行欢迎Star哦！谢谢哦！
+
 
 
 
