@@ -18,9 +18,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem Read version from main.py (e.g. "Alpha v0.2.3" -> "Alpha_v0.2.3")，只匹配赋值行
-set "VER_FNAME=Alpha_v0.2.3"
-for /f "tokens=2 delims=^" %%a in ('findstr /c:"_VERSION = " main.py 2^>nul') do set "VER=%%a"
+rem Read version from main.py (e.g. "Alpha v0.3.1" -> "Alpha_v0.3.1")
+set "VER_FNAME=Alpha_v0.3.1"
+for /f "tokens=2 delims=^" %%a in ('findstr /b "_VERSION" main.py 2^>nul') do set "VER=%%a"
 if defined VER set "VER_FNAME=%VER: =_%"
 
 rem Clean previous outputs
@@ -124,8 +124,10 @@ echo  [%ARCH%] Building executable ^(1-2 minutes^)...
 set "BUILD_LOG=build_%ARCH%_log.txt"
 set "ICON_ARGS="
 if defined ICON_ICO if exist "icon.ico" (
-    set "ICON_ARGS=--icon=%~dp0icon.ico --add-data ""%~dp0icon.png;."" --add-data ""%~dp0icon.ico;."""
+    rem 使用相对路径，避免 PyInstaller 在 build_ARCH 下查找 icon
+    set "ICON_ARGS=--icon=icon.ico --add-data ""icon.png;."" --add-data ""icon.ico;."""
 )
+rem specpath 放在项目根，使 datas 中的 icon.png 从项目根解析，避免在 build_ARCH 下找不到
 py %PY_FLAG% -m PyInstaller ^
     --onefile ^
     --noconsole ^
@@ -133,7 +135,7 @@ py %PY_FLAG% -m PyInstaller ^
     --name "GreenDiskVisualizer_%VER_FNAME%_%ARCH%" ^
     --distpath "dist" ^
     --workpath "build_%ARCH%" ^
-    --specpath "build_%ARCH%" ^
+    --specpath "." ^
     --clean ^
     %ICON_ARGS% ^
     main.py >"%BUILD_LOG%" 2>&1

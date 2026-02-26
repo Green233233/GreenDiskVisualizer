@@ -1,10 +1,14 @@
 import sys
 import os
+import json
+import subprocess
 import threading
+import webbrowser
 import platform
 import ctypes
 import colorsys
 import time
+from datetime import datetime as dt
 from typing import List, Dict
 
 if getattr(sys, "frozen", False):
@@ -18,11 +22,16 @@ if getattr(sys, "frozen", False):
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from models import ScanOptions, ScanResult
 from scanner import list_disks, scan_path
 from treemap import build_treemap, TreemapNode
+
+try:
+    from PIL import ImageGrab
+except ImportError:
+    ImageGrab = None
 
 # ── Theme ────────────────────────────────────────────────────────
 
@@ -57,7 +66,7 @@ _FONT_SIZES = [8, 7, 6, 6, 5]
 _MIN_BLOCK_W = [60, 50, 40, 30, 24]
 _MIN_BLOCK_H = [45, 38, 30, 24, 18]
 
-_VERSION = "Alpha v0.2.3"
+_VERSION = "Alpha v0.3.0"
 
 
 def _hsl_to_hex(h: float, s: float, l: float) -> str:
@@ -95,6 +104,22 @@ def _is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
+
+
+def _set_dark_title_bar(window: tk.Tk) -> None:
+    """Windows 10/11: 将窗口标题栏设为深色。"""
+    if platform.system() != "Windows":
+        return
+    try:
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        value = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(value), ctypes.sizeof(value),
+        )
+    except Exception:
+        pass
 
 
 # ── Application ──────────────────────────────────────────────────
@@ -358,8 +383,38 @@ class App(tk.Tk):
         self._last_live_draw: float = 0.0
         self._scan_mode: str = "fast"
         self._font_cache: dict = {}
+        self._block_regions: list = []  # 每块 {rect, full_path, data, label}，绘制顺序追加
+        self._current_view: tuple | None = None  # None=完整结果，(parent_path, sub_hierarchy)=缩放视图
 
         self._update_splash_progress(0.25, "正在创建界面组件...")
+
+        # Menu bar（在 top_frame 之上，深色主题）
+        _menu_bg = THEME["bg_header"]
+        _menu_fg = THEME["text"]
+        _menu_abg = THEME["accent_dim"]
+        _menu_afg = THEME["text"]
+        menubar = tk.Menu(
+            self, tearoff=0,
+            bg=_menu_bg, fg=_menu_fg,
+            activebackground=_menu_abg, activeforeground=_menu_afg,
+            selectcolor=THEME["accent"],
+        )
+        self.config(menu=menubar)
+
+        menu_export = tk.Menu(menubar, tearoff=0, bg=THEME["bg_surface"], fg=_menu_fg,
+                               activebackground=_menu_abg, activeforeground=_menu_afg)
+        menubar.add_cascade(label="导出(E)", menu=menu_export, underline=3)
+        menu_export.add_command(label="导出为图片(P)", command=self._menu_export_png, underline=6)
+        menu_export.add_command(label="导出为专用格式(G)", command=self._menu_export_gfav, underline=8)
+
+        menubar.add_command(label="导入(I)", command=self._menu_import_gfav, underline=3)
+
+        menu_new = tk.Menu(menubar, tearoff=0, bg=THEME["bg_surface"], fg=_menu_fg,
+                          activebackground=_menu_abg, activeforeground=_menu_afg)
+        menubar.add_cascade(label="新建(N)", menu=menu_new, underline=3)
+        menu_new.add_command(label="新建一个窗口(W)", command=self._menu_new_window, underline=7)
+
+        menubar.add_command(label="关于(A)", command=self._menu_about, underline=3)
 
         # Top toolbar
         top_frame = tk.Frame(self, bg=THEME["bg_header"])
@@ -384,7 +439,7 @@ class App(tk.Tk):
         self._scan_mode_canvases: List[tuple] = []  # [(value, canvas), ...]
         mode_frame = tk.Frame(inner, bg=THEME["bg_header"])
         mode_frame.pack(side=tk.LEFT, padx=(20, 0))
-        for text, value in [("快速扫描", "fast"), ("完整扫描", "full")]:
+        for text, value in [("快速扫描(F)", "fast"), ("完整扫描(C)", "full")]:
             padx = (0, 12) if value == "fast" else (0, 0)
             self._add_big_dot_radio(mode_frame, text, value, padx)
         self.mode_var.trace_add("write", lambda *a: self._draw_scan_mode_dots())
@@ -411,6 +466,13 @@ class App(tk.Tk):
         self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True,
                          padx=10, pady=(4, 4))
         self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
+        self.canvas.bind("<Leave>", self._on_canvas_leave)
+        self.canvas.bind("<Button-1>", self._on_canvas_click)
+        self.canvas.bind("<Double-Button-1>", self._on_canvas_double_click)
+        self._tooltip_win: tk.Toplevel | None = None
+        self._tooltip_after_id: str | None = None
+        self._pending_click_id: str | None = None
 
         # Status bar：用 tk.Label 避免 ttk 主题裁切，足够高度+居左
         status_bar = tk.Frame(self, bg=THEME["bg_header"], height=48)
@@ -430,6 +492,16 @@ class App(tk.Tk):
         status_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
                          padx=(14, 14), pady=10)
 
+        # Alt 快捷键
+        self.bind("<Alt-s>", lambda e: self.on_scan_clicked())
+        self.bind("<Alt-S>", lambda e: self.on_scan_clicked())
+        self.bind("<Alt-f>", lambda e: self.mode_var.set("fast"))
+        self.bind("<Alt-F>", lambda e: self.mode_var.set("fast"))
+        self.bind("<Alt-c>", lambda e: self.mode_var.set("full"))
+        self.bind("<Alt-C>", lambda e: self.mode_var.set("full"))
+        self.bind("<Alt-d>", lambda e: self.disk_combo.focus_set())
+        self.bind("<Alt-D>", lambda e: self.disk_combo.focus_set())
+
         self._update_splash_progress(0.65, "正在检测磁盘信息...")
         self.load_disks()
 
@@ -442,6 +514,7 @@ class App(tk.Tk):
         except Exception:
             pass
         self.deiconify()
+        _set_dark_title_bar(self)
         if not self._is_admin:
             self.info_var.set(
                 '提示：当前以非管理员权限运行，MFT加速扫描不可用，'
@@ -459,6 +532,222 @@ class App(tk.Tk):
             self.info_var.set('请选择磁盘并点击"扫描"。')
         else:
             self.info_var.set("未发现可扫描的磁盘。")
+
+    def _menu_export_png(self) -> None:
+        """导出画布为 PNG，由 t3 实现。"""
+        if not self._scan_result:
+            messagebox.showinfo("导出", "请先完成扫描再导出。")
+            return
+        self._do_export_png()
+
+    def _do_export_png(self) -> None:
+        """导出画布区域为 PNG。"""
+        if ImageGrab is None:
+            messagebox.showerror("导出", "未安装 Pillow，无法导出为图片。请安装：pip install Pillow")
+            return
+        disk_path = self._scan_result.stats.disk_path
+        drive = (disk_path.rstrip("\\").rstrip(":") or "disk").replace(":", "_")
+        default_name = f"{dt.now().strftime('%Y-%m-%d_%H%M%S')}_{drive}.png"
+        path = filedialog.asksaveasfilename(
+            title="导出为图片",
+            defaultextension=".png",
+            initialfile=default_name,
+            filetypes=[("PNG 图片", "*.png"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        self.canvas.update_idletasks()
+        x = self.canvas.winfo_rootx()
+        y = self.canvas.winfo_rooty()
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w <= 0 or h <= 0:
+            messagebox.showerror("导出", "画布区域无效，无法截取。")
+            return
+        try:
+            img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+            img.save(path)
+            messagebox.showinfo("导出", f"已保存：{path}")
+        except Exception as e:
+            messagebox.showerror("导出", f"保存失败：{e}")
+
+    def _menu_export_gfav(self) -> None:
+        """导出为 .gfav，由 t4 实现。"""
+        if not self._scan_result:
+            messagebox.showinfo("导出", "请先完成扫描再导出。")
+            return
+        self._do_export_gfav()
+
+    def _do_export_gfav(self) -> None:
+        """导出为 .gfav 专用格式。"""
+        disk_path = self._scan_result.stats.disk_path
+        drive = (disk_path.rstrip("\\").rstrip(":") or "disk").replace(":", "_")
+        ver_safe = _VERSION.replace(" ", "_").replace("\t", "_")
+        default_name = f"{dt.now().strftime('%Y-%m-%d_%H%M%S')}_{drive}_{ver_safe}.gfav"
+        path = filedialog.asksaveasfilename(
+            title="导出为专用格式",
+            defaultextension=".gfav",
+            initialfile=default_name,
+            filetypes=[("GFAV 专用格式", "*.gfav"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            payload = self._scan_result.to_gfav_dict()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("GFAV\t" + _VERSION + "\n")
+                f.write(json.dumps(payload, ensure_ascii=False))
+            messagebox.showinfo("导出", f"已保存：{path}")
+        except Exception as e:
+            messagebox.showerror("导出", f"保存失败：{e}")
+
+    def _menu_import_gfav(self) -> None:
+        """导入 .gfav，由 t4 实现。"""
+        self._do_import_gfav()
+
+    def _do_import_gfav(self) -> None:
+        """从 .gfav 文件导入并刷新画布。"""
+        path = filedialog.askopenfilename(
+            title="导入专用格式",
+            filetypes=[("GFAV 专用格式", "*.gfav"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                first = f.readline()
+                if not first.startswith("GFAV\t"):
+                    messagebox.showerror("导入", "不是有效的 .gfav 文件（缺少 GFAV 头）。")
+                    return
+                rest = f.read()
+            data = json.loads(rest)
+        except json.JSONDecodeError as e:
+            messagebox.showerror("导入", f"JSON 解析失败：{e}")
+            return
+        except Exception as e:
+            messagebox.showerror("导入", f"读取失败：{e}")
+            return
+        try:
+            self._scan_result = ScanResult.from_gfav_dict(data)
+            if getattr(self, "_current_view", None) is not None:
+                self._current_view = None
+            self._draw_treemap_from_hierarchy(self._scan_result.hierarchy, is_live=False)
+            self.info_var.set(f"已导入：{self._scan_result.stats.disk_path}")
+        except Exception as e:
+            messagebox.showerror("导入", f"加载失败：{e}")
+
+    def _menu_new_window(self) -> None:
+        """新建一个窗口，由 t5 实现。"""
+        self._do_new_window()
+
+    def _do_new_window(self) -> None:
+        """启动新进程再开一个窗口。"""
+        try:
+            cmd = [sys.executable]
+            if not getattr(sys, "frozen", False):
+                cmd.append(__file__)
+            subprocess.Popen(cmd, cwd=os.getcwd())
+        except Exception as e:
+            messagebox.showerror("新建窗口", f"启动失败：{e}")
+
+    def _menu_about(self) -> None:
+        """关于窗口，由 t6 实现。"""
+        self._do_about()
+
+    def _do_about(self) -> None:
+        """关于窗口：按文档一字不差展示，居中于主窗口。"""
+        win = tk.Toplevel(self)
+        win.title("关于")
+        win.configure(bg=THEME["bg_surface"])
+        win.transient(self)
+        win.resizable(False, False)
+        pad = 26
+        f = tk.Frame(win, bg=THEME["bg_surface"])
+        f.pack(padx=pad, pady=pad, fill=tk.BOTH, expand=True)
+        font_title = ("Segoe UI", 11, "bold")
+        font_body = ("Segoe UI", 10)
+        font_small = ("Segoe UI", 9)
+        wraplen = 600
+        row_gap = 6
+        section_gap = 22
+
+        # 作者信息
+        tk.Label(f, text="作者信息", font=font_title,
+                 fg=THEME["text"], bg=THEME["bg_surface"]).pack(anchor="w")
+        tk.Label(f, text="作者：Green233", font=font_body,
+                 fg=THEME["text"], bg=THEME["bg_surface"]).pack(anchor="w", pady=(0, row_gap))
+        qq_num = "3559946768"
+        lb_qq = tk.Label(f, text=f"QQ：{qq_num}", font=font_body,
+                         fg=THEME["accent"], bg=THEME["bg_surface"], cursor="hand2")
+        lb_qq.pack(anchor="w", pady=(0, row_gap))
+        def copy_qq(_e=None):
+            win.clipboard_clear()
+            win.clipboard_append(qq_num)
+            messagebox.showinfo("关于", "QQ号已复制到剪贴板。", parent=win)
+        lb_qq.bind("<Button-1>", copy_qq)
+        email = "green233@green233.com"
+        lb_email = tk.Label(f, text=f"电子邮箱：{email}", font=font_body,
+                            fg=THEME["accent"], bg=THEME["bg_surface"], cursor="hand2")
+        lb_email.pack(anchor="w")
+        def copy_email(_e=None):
+            win.clipboard_clear()
+            win.clipboard_append(email)
+            messagebox.showinfo("关于", "邮箱已复制到剪贴板。", parent=win)
+        lb_email.bind("<Button-1>", copy_email)
+
+        # 项目信息
+        tk.Label(f, text="项目信息", font=font_title,
+                 fg=THEME["text"], bg=THEME["bg_surface"]).pack(anchor="w", pady=(section_gap, 0))
+        url_repo = "https://github.com/Green233233/GreenDiskVisualizer"
+        row_repo = tk.Frame(f, bg=THEME["bg_surface"])
+        row_repo.pack(anchor="w", pady=(0, row_gap))
+        tk.Label(row_repo, text="本项目已在 GitHub 上开源 ", font=font_body,
+                 fg=THEME["text"], bg=THEME["bg_surface"]).pack(side=tk.LEFT)
+        lb_repo = tk.Label(row_repo, text="项目地址", font=font_body,
+                           fg=THEME["accent"], bg=THEME["bg_surface"], cursor="hand2")
+        lb_repo.pack(side=tk.LEFT)
+        lb_repo.bind("<Button-1>", lambda e: webbrowser.open(url_repo))
+        tk.Label(f, text="（所以如果你在哪里买到了这个软件一定要狠狠地给一个差评！！！）",
+                 font=font_body, fg=THEME["text"], bg=THEME["bg_surface"],
+                 wraplength=wraplen, justify=tk.LEFT).pack(anchor="w", pady=(0, row_gap))
+        tk.Label(f, text=" 项目部分代码使用AI辅助编写",
+                 font=font_body, fg=THEME["text_dim"], bg=THEME["bg_surface"],
+                 wraplength=wraplen, justify=tk.LEFT).pack(anchor="w")
+
+        # 反馈和帮助
+        tk.Label(f, text="反馈和帮助", font=font_title,
+                 fg=THEME["text"], bg=THEME["bg_surface"]).pack(anchor="w", pady=(section_gap, 0))
+        tk.Label(f, text="如在使用中遇到问题 欢迎提交 issue 反馈",
+                 font=font_body, fg=THEME["text"], bg=THEME["bg_surface"],
+                 wraplength=wraplen, justify=tk.LEFT).pack(anchor="w", pady=(0, row_gap))
+        row_readme = tk.Frame(f, bg=THEME["bg_surface"])
+        row_readme.pack(anchor="w", pady=(0, row_gap))
+        tk.Label(row_readme, text="本软件的详细使用方法请参考 ", font=font_body,
+                 fg=THEME["text"], bg=THEME["bg_surface"]).pack(side=tk.LEFT)
+        lb_readme = tk.Label(row_readme, text="项目的readme文档", font=font_body,
+                              fg=THEME["accent"], bg=THEME["bg_surface"], cursor="hand2")
+        lb_readme.pack(side=tk.LEFT)
+        lb_readme.bind("<Button-1>", lambda e: webbrowser.open(url_repo))
+        tk.Label(f, text="满意请赏个 Star 哦",
+                 font=font_body, fg=THEME["text"], bg=THEME["bg_surface"]).pack(anchor="w")
+        # 与上一句拉开约 1.5 行高
+        tk.Label(f, text="对了，你看《金牌得主》第二季了吗，超好看的！！！",
+                 font=font_small, fg=THEME["text_dim"], bg=THEME["bg_surface"],
+                 wraplength=wraplen, justify=tk.LEFT).pack(anchor="w", pady=(22, 0))
+
+        tk.Button(f, text="关闭", command=win.destroy,
+                  bg=THEME["accent_dim"], fg=THEME["text"], relief=tk.FLAT,
+                  padx=12, pady=4, cursor="hand2").pack(pady=(20, 0))
+        win.update_idletasks()
+        w = win.winfo_reqwidth()
+        h = win.winfo_reqheight()
+        mx = self.winfo_x()
+        my = self.winfo_y()
+        mw = self.winfo_width()
+        mh = self.winfo_height()
+        x = mx + max(0, (mw - w) // 2)
+        y = my + max(0, (mh - h) // 2)
+        win.geometry(f"+{x}+{y}")
 
     def on_scan_clicked(self) -> None:
         if self._current_thread and self._current_thread.is_alive():
@@ -642,8 +931,14 @@ class App(tk.Tk):
     def _draw_treemap_from_hierarchy(
             self, hierarchy: dict, *, is_live: bool = False) -> None:
         self.canvas.delete("all")
+        self._block_regions = []
         if not hierarchy:
             return
+
+        if self._current_view is not None:
+            path_prefix = self._current_view[0]
+        else:
+            path_prefix = (self._scan_result.stats.disk_path if self._scan_result else "") or ""
 
         width = max(self.canvas.winfo_width(), 800)
         height = max(self.canvas.winfo_height(), 500)
@@ -699,7 +994,7 @@ class App(tk.Tk):
                 node.label, data,
                 bx, by, bw, bh,
                 hue, depth=0, max_depth=max_depth,
-                grand_total=grand_total)
+                grand_total=grand_total, path_prefix=path_prefix)
 
         if is_live:
             self.canvas.create_text(
@@ -707,16 +1002,35 @@ class App(tk.Tk):
                 text="扫描中...",
                 fill=THEME["accent"],
                 font=("Segoe UI", 9, "bold"))
+        if self._current_view is not None:
+            rx, ry, rw, rh = 8, 8, 82, 26
+            self.canvas.create_rectangle(
+                rx, ry, rx + rw, ry + rh,
+                fill=THEME["accent_dim"], outline=THEME["accent"], width=1)
+            self.canvas.create_text(
+                rx + rw / 2, ry + rh / 2, anchor="c", text="返回根",
+                fill=THEME["text"], font=("Segoe UI", 9, "bold"))
+            self._return_btn_rect = (rx, ry, rx + rw, ry + rh)
+        else:
+            self._return_btn_rect = None
 
     def _draw_block(self, name: str, data: dict,
                     x: float, y: float, w: float, h: float,
                     hue: int, depth: int, max_depth: int,
-                    grand_total: float) -> None:
+                    grand_total: float, path_prefix: str = "") -> None:
         """Recursively draw a treemap block with optional children."""
         children = data.get("children", {})
         total = data.get("total", 0)
         if total <= 0:
             return
+
+        full_path = (path_prefix.rstrip("\\") + "\\" + name) if path_prefix else name
+        self._block_regions.append({
+            "rect": (x, y, w, h),
+            "full_path": full_path,
+            "data": data,
+            "label": name,
+        })
 
         pct = total / grand_total * 100 if grand_total > 0 else 0
         size_text = self._format_size(int(total))
@@ -744,7 +1058,8 @@ class App(tk.Tk):
         if should_expand:
             self._draw_expanded_block(
                 name, size_text, pct, children,
-                x, y, w, h, hue, depth, max_depth, grand_total, total)
+                x, y, w, h, hue, depth, max_depth, grand_total, total,
+                path_prefix=full_path)
         else:
             self._draw_leaf_block(
                 name, size_text, pct, x, y, w, h, hue, depth)
@@ -754,7 +1069,8 @@ class App(tk.Tk):
             children: dict,
             x: float, y: float, w: float, h: float,
             hue: int, depth: int, max_depth: int,
-            grand_total: float, parent_total: float) -> None:
+            grand_total: float, parent_total: float,
+            path_prefix: str = "") -> None:
         di = min(depth, len(_HEADER_HEIGHTS) - 1)
         header_h = _HEADER_HEIGHTS[di]
         font_sz = _FONT_SIZES[di]
@@ -857,7 +1173,8 @@ class App(tk.Tk):
             self._draw_block(
                 cn.label, child_data,
                 bx2, by2, bw2, bh2,
-                child_hue, depth + 1, max_depth, grand_total)
+                child_hue, depth + 1, max_depth, grand_total,
+                path_prefix=path_prefix)
 
     def _draw_leaf_block(self, label: str, size_text: str, pct: float,
                          x: float, y: float, w: float, h: float,
@@ -913,6 +1230,144 @@ class App(tk.Tk):
                     x + 2, y + 2, anchor="nw", text=disp,
                     fill="#b0b0b0", font=tiny_font)
 
+    def _block_at(self, x: float, y: float) -> dict | None:
+        """从后向前找第一个包含 (x,y) 的块。"""
+        for r in reversed(self._block_regions):
+            rx, ry, rw, rh = r["rect"]
+            if rx <= x <= rx + rw and ry <= y <= ry + rh:
+                return r
+        return None
+
+    def _on_canvas_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        # 取消待显示的 tooltip，避免移出画布后仍弹出
+        if self._tooltip_after_id is not None:
+            self.after_cancel(self._tooltip_after_id)
+            self._tooltip_after_id = None
+        r = getattr(self, "_return_btn_rect", None)
+        if r and r[0] <= event.x <= r[2] and r[1] <= event.y <= r[3]:
+            self._hide_tooltip()
+            return
+        block = self._block_at(event.x, event.y)
+        if block:
+            # 延迟 60ms 再显示，减少频繁 Motion 时的 _show_tooltip 调用，利于性能
+            text = block["full_path"] + "\n单击缩放  双击在资源管理器中打开"
+            self._tooltip_after_id = self.after(
+                60,
+                lambda rx=event.x_root, ry=event.y_root, t=text: self._delayed_show_tooltip(rx, ry, t),
+            )
+        else:
+            self._hide_tooltip()
+
+    def _on_canvas_leave(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self._tooltip_after_id is not None:
+            self.after_cancel(self._tooltip_after_id)
+            self._tooltip_after_id = None
+        self._hide_tooltip()
+
+    def _delayed_show_tooltip(self, root_x: int, root_y: int, text: str) -> None:
+        self._tooltip_after_id = None
+        self._show_tooltip(root_x, root_y, text)
+
+    def _show_tooltip(self, root_x: int, root_y: int, text: str) -> None:
+        if self._tooltip_win is None:
+            self._tooltip_win = tk.Toplevel(self)
+            self._tooltip_win.wm_overrideredirect(True)
+            self._tooltip_win.wm_geometry("+0+0")
+            self._tooltip_lb = tk.Label(
+                self._tooltip_win, text="", font=("Segoe UI", 9),
+                bg=THEME["bg_surface"], fg=THEME["text"],
+                padx=8, pady=6, justify=tk.LEFT,
+            )
+            self._tooltip_lb.pack()
+        self._tooltip_lb["text"] = text
+        self._tooltip_win.update_idletasks()
+        tw = self._tooltip_win.winfo_reqwidth()
+        th = self._tooltip_win.winfo_reqheight()
+        off = 14
+        self._tooltip_win.wm_geometry(f"+{root_x + off}+{root_y + off}")
+        try:
+            self._tooltip_win.deiconify()
+        except Exception:
+            pass
+
+    def _hide_tooltip(self) -> None:
+        if self._tooltip_after_id is not None:
+            try:
+                self.after_cancel(self._tooltip_after_id)
+            except Exception:
+                pass
+            self._tooltip_after_id = None
+        if self._tooltip_win is not None:
+            try:
+                self._tooltip_win.withdraw()
+            except Exception:
+                pass
+
+    def _on_canvas_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self._pending_click_id is not None:
+            self.after_cancel(self._pending_click_id)
+            self._pending_click_id = None
+        r = getattr(self, "_return_btn_rect", None)
+        if r and r[0] <= event.x <= r[2] and r[1] <= event.y <= r[3]:
+            self._go_back_to_root()
+            return
+        block = self._block_at(event.x, event.y)
+        if not block:
+            return
+        # 延迟执行单击（若随后发生双击则取消）
+        self._pending_click_event = event
+        self._pending_click_id = self.after(280, self._do_single_click)
+
+    def _do_single_click(self) -> None:
+        self._pending_click_id = None
+        event = getattr(self, "_pending_click_event", None)
+        if event is None:
+            return
+        block = self._block_at(event.x, event.y)
+        if not block:
+            return
+        data = block["data"]
+        children = data.get("children") if isinstance(data, dict) else {}
+        if isinstance(children, dict) and len(children) > 0:
+            self._current_view = (block["full_path"], children)
+            self._draw_treemap_from_hierarchy(children, is_live=False)
+
+    def _on_canvas_double_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self._pending_click_id is not None:
+            self.after_cancel(self._pending_click_id)
+            self._pending_click_id = None
+        r = getattr(self, "_return_btn_rect", None)
+        if r and r[0] <= event.x <= r[2] and r[1] <= event.y <= r[3]:
+            return
+        block = self._block_at(event.x, event.y)
+        if not block:
+            return
+        path = block["full_path"]
+        if not path:
+            return
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(
+                    ["explorer", "/select," + path],
+                    shell=False, timeout=5,
+                )
+            else:
+                subprocess.run(
+                    ["xdg-open", path] if os.path.isdir(path) else ["xdg-open", os.path.dirname(path)],
+                    shell=False, timeout=5,
+                )
+        except Exception:
+            if platform.system() == "Windows":
+                try:
+                    os.startfile(path)
+                except Exception:
+                    pass
+
+    def _go_back_to_root(self) -> None:
+        self._current_view = None
+        if self._scan_result is not None:
+            self._draw_treemap_from_hierarchy(self._scan_result.hierarchy, is_live=False)
+
     # ── Canvas resize ────────────────────────────────────────────
 
     def _on_canvas_configure(self, event: tk.Event) -> None:  # type: ignore[type-arg]
@@ -927,8 +1382,11 @@ class App(tk.Tk):
     def _deferred_redraw(self) -> None:
         self._resize_after_id = None
         if self._scan_result is not None:
-            self._draw_treemap_from_hierarchy(
-                self._scan_result.hierarchy, is_live=False)
+            hierarchy = (
+                self._current_view[1] if self._current_view is not None
+                else self._scan_result.hierarchy
+            )
+            self._draw_treemap_from_hierarchy(hierarchy, is_live=False)
 
     # ── Utility ──────────────────────────────────────────────────
 
