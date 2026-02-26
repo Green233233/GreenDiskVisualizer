@@ -75,7 +75,7 @@
 
 2. 下载项目源码或克隆仓库。
 
-3. 双击 `run\_visualizer.bat` 文件，或通过命令行执行：
+3. 双击 `run_visualizer.bat` 文件，或通过命令行执行：
 
 
 
@@ -95,7 +95,7 @@ python main.py
 
 2. 双击 `build.bat` 文件，等待打包完成。
 
-3. 生成的 `GreenDiskVisualizer\_版本号\_可运行架构.exe` 文件位于 `dist` 文件夹中。
+3. 生成的 `GreenDiskVisualizer_版本号_可运行架构.exe` 文件位于 `dist` 文件夹中。
 
 4. 生成的可执行文件可复制至同平台的 Windows 7 及以上版本系统中直接运行，无需安装 Python。
 
@@ -111,13 +111,13 @@ python main.py
 
 `requirements.txt`：项目依赖说明文件
 
-`run\_visualizer.bat`：开发环境一键运行脚本
+`run_visualizer.bat`：开发环境一键运行脚本
 
 `build.bat`：一键打包脚本，用于将源码打包为独立的可执行文件
 
-`build\_icon\_ico.py`：PNG 图标转 ICO 格式工具文件
+`build_icon_ico.py`：PNG 图标转 ICO 格式工具文件
 
-`mft\_scanner.py`：MFT 主文件表读取与扫描实现文件
+`mft_scanner.py`：MFT 主文件表读取与扫描实现文件
 
 `icon.ico、icon.png`：软件图标文件
 
