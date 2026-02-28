@@ -66,7 +66,7 @@ _FONT_SIZES = [8, 7, 6, 6, 5]
 _MIN_BLOCK_W = [60, 50, 40, 30, 24]
 _MIN_BLOCK_H = [45, 38, 30, 24, 18]
 
-_VERSION = "Alpha v0.3.0"
+_VERSION = "Alpha v0.3.3"
 
 
 def _hsl_to_hex(h: float, s: float, l: float) -> str:
@@ -459,6 +459,17 @@ class App(tk.Tk):
             self, mode="determinate", maximum=1000)
         self.progress.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(4, 2))
 
+        # 返回根按钮（仅在缩放视图时显示，不画在画布上以免遮挡块名）
+        self._return_root_frame = tk.Frame(self, bg=THEME["bg_deep"])
+        self._return_root_btn = tk.Button(
+            self._return_root_frame, text="返回根",
+            command=self._go_back_to_root,
+            bg=THEME["accent_dim"], fg=THEME["text"], relief=tk.FLAT,
+            font=("Segoe UI", 9, "bold"), padx=12, pady=4, cursor="hand2",
+        )
+        self._return_root_btn.pack(side=tk.LEFT)
+        # 初始不 pack，由 _update_return_button_visibility 控制
+
         # Canvas
         self.canvas = tk.Canvas(
             self, bg=THEME["canvas_bg"], highlightthickness=0,
@@ -594,6 +605,7 @@ class App(tk.Tk):
             return
         try:
             payload = self._scan_result.to_gfav_dict()
+            payload["export_version"] = _VERSION
             with open(path, "w", encoding="utf-8") as f:
                 f.write("GFAV\t" + _VERSION + "\n")
                 f.write(json.dumps(payload, ensure_ascii=False))
@@ -632,7 +644,18 @@ class App(tk.Tk):
             if getattr(self, "_current_view", None) is not None:
                 self._current_view = None
             self._draw_treemap_from_hierarchy(self._scan_result.hierarchy, is_live=False)
-            self.info_var.set(f"已导入：{self._scan_result.stats.disk_path}")
+            self._update_return_button_visibility()
+            # 导入后展示扫描时间、导出版本（首行 GFAV\t 后为版本）
+            gfav_version = first[5:].strip() if first.startswith("GFAV\t") else ""
+            scan_time_str = ""
+            if data.get("stats") and data["stats"].get("scan_time"):
+                scan_time_str = data["stats"]["scan_time"]
+            parts = [f"已导入：{self._scan_result.stats.disk_path}"]
+            if scan_time_str:
+                parts.append(f"扫描时间：{scan_time_str}")
+            if gfav_version:
+                parts.append(f"导出版本：{gfav_version}")
+            self.info_var.set("  ".join(parts))
         except Exception as e:
             messagebox.showerror("导入", f"加载失败：{e}")
 
@@ -823,6 +846,7 @@ class App(tk.Tk):
         self._progress_updater_running = False
         self.progress["value"] = self.progress["maximum"]
         self._scan_result = result
+        self._current_view = None  # 扫描完成统一回到根视图
 
         method_text = "MFT加速" if result.scan_method == "mft" else "标准"
         self.info_var.set(
@@ -836,6 +860,7 @@ class App(tk.Tk):
             f"可用: {self._format_size(result.stats.free_size)}")
 
         self._draw_treemap_from_hierarchy(result.hierarchy, is_live=False)
+        self._update_return_button_visibility()
 
     def on_scan_failed(self, message: str) -> None:
         self._progress_updater_running = False
@@ -894,7 +919,9 @@ class App(tk.Tk):
                 f"预计剩余时间：{eta}")
 
         now = time.time()
+        # 若用户已单击缩放，不进行 live 重绘，避免视图被顶回根
         if (self._live_hierarchy
+                and getattr(self, "_current_view", None) is None
                 and now - self._last_live_draw >= 1.5):
             self._last_live_draw = now
             self._draw_treemap_from_hierarchy(
@@ -1002,17 +1029,8 @@ class App(tk.Tk):
                 text="扫描中...",
                 fill=THEME["accent"],
                 font=("Segoe UI", 9, "bold"))
-        if self._current_view is not None:
-            rx, ry, rw, rh = 8, 8, 82, 26
-            self.canvas.create_rectangle(
-                rx, ry, rx + rw, ry + rh,
-                fill=THEME["accent_dim"], outline=THEME["accent"], width=1)
-            self.canvas.create_text(
-                rx + rw / 2, ry + rh / 2, anchor="c", text="返回根",
-                fill=THEME["text"], font=("Segoe UI", 9, "bold"))
-            self._return_btn_rect = (rx, ry, rx + rw, ry + rh)
-        else:
-            self._return_btn_rect = None
+        # 返回根已移至顶栏 _return_root_frame，此处不再绘制
+        self._return_btn_rect = None
 
     def _draw_block(self, name: str, data: dict,
                     x: float, y: float, w: float, h: float,
@@ -1331,6 +1349,7 @@ class App(tk.Tk):
         if isinstance(children, dict) and len(children) > 0:
             self._current_view = (block["full_path"], children)
             self._draw_treemap_from_hierarchy(children, is_live=False)
+            self._update_return_button_visibility()
 
     def _on_canvas_double_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         if self._pending_click_id is not None:
@@ -1367,6 +1386,16 @@ class App(tk.Tk):
         self._current_view = None
         if self._scan_result is not None:
             self._draw_treemap_from_hierarchy(self._scan_result.hierarchy, is_live=False)
+        self._update_return_button_visibility()
+
+    def _update_return_button_visibility(self) -> None:
+        """根据 _current_view 显示或隐藏顶栏「返回根」按钮。"""
+        if getattr(self, "_return_root_frame", None) is None:
+            return
+        if self._current_view is not None:
+            self._return_root_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
+        else:
+            self._return_root_frame.pack_forget()
 
     # ── Canvas resize ────────────────────────────────────────────
 
