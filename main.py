@@ -35,7 +35,7 @@ except ImportError:
 
 # ── Theme ────────────────────────────────────────────────────────
 
-THEME = {
+THEME_DARK = {
     "bg_deep":     "#0b1622",
     "bg_surface":  "#132238",
     "bg_header":   "#1a3050",
@@ -49,6 +49,28 @@ THEME = {
     "canvas_bg":   "#0e1a28",
     "error":       "#e74c3c",
 }
+
+THEME_LIGHT = {
+    "bg_deep":     "#e8f4fc",
+    "bg_surface":  "#f0f8ff",
+    "bg_header":   "#b8d4e8",
+    "accent":      "#1e88c4",
+    "accent_dim":  "#1565a0",
+    "accent_light":"#42a5f5",
+    "text":        "#1a237e",
+    "text_dim":    "#5c6bc0",
+    "border":      "#90caf9",
+    "progress_bg": "#bbdefb",
+    "canvas_bg":   "#e3f2fd",
+    "error":       "#c62828",
+    "button_fg":           "#ffffff",
+    "combobox_fg":         "#1a237e",
+    "combobox_select_fg":  "#ffffff",
+    "header_hover_fg":     "#1a237e",   # 顶栏控件悬停时文字色（浅色底上深色更易读）
+    "menu_active_fg":      "#ffffff",   # 菜单项悬停时文字色（深蓝底上白色更易读）
+}
+
+THEME = dict(THEME_DARK)  # 当前主题，切换时整体替换
 
 _BASE_HUES = [162, 200, 30, 275, 345, 120, 75, 240, 50, 185]
 
@@ -66,7 +88,7 @@ _FONT_SIZES = [8, 7, 6, 6, 5]
 _MIN_BLOCK_W = [60, 50, 40, 30, 24]
 _MIN_BLOCK_H = [45, 38, 30, 24, 18]
 
-_VERSION = "Alpha v0.3.3"
+_VERSION = "Alpha v0.3.5"
 
 
 def _hsl_to_hex(h: float, s: float, l: float) -> str:
@@ -222,7 +244,7 @@ class App(tk.Tk):
 
         style.configure("TButton",
                         background=THEME["accent"],
-                        foreground=THEME["bg_deep"],
+                        foreground=THEME.get("button_fg", THEME["bg_deep"]),
                         padding=(16, 5),
                         font=("Segoe UI", 9, "bold"))
         style.map("TButton",
@@ -245,12 +267,13 @@ class App(tk.Tk):
         style.configure("TCombobox",
                         fieldbackground=THEME["bg_header"],
                         background=THEME["bg_header"],
-                        foreground="#ffffff",
+                        foreground=THEME.get("combobox_fg", "#ffffff"),
                         arrowcolor=THEME["accent"],
                         selectbackground=THEME["accent"],
-                        selectforeground=THEME["bg_deep"])
+                        selectforeground=THEME.get("combobox_select_fg", THEME["bg_deep"]))
+        _cf = THEME.get("combobox_fg", "#ffffff")
         style.map("TCombobox",
-                  foreground=[("readonly", "#ffffff"), ("active", "#ffffff")],
+                  foreground=[("readonly", _cf), ("active", _cf)],
                   fieldbackground=[("readonly", THEME["bg_header"]), ("active", THEME["bg_header"])])
 
         style.configure("TRadiobutton",
@@ -283,6 +306,65 @@ class App(tk.Tk):
                         font=("Segoe UI", 8),
                         anchor="w")
 
+    def _set_theme(self, name: str) -> None:
+        """切换主题：name 为 'dark' 或 'light'。"""
+        if name not in ("dark", "light"):
+            return
+        self._theme_name = name
+        THEME.clear()
+        THEME.update(THEME_LIGHT if name == "light" else THEME_DARK)
+        self._setup_theme()
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """根据当前 THEME 重配置主窗口与已保存的控件，并刷新路径栏、模式点、画布。"""
+        self.configure(bg=THEME["bg_deep"])
+        top = getattr(self, "_top_frame", None)
+        if top is not None:
+            top.configure(bg=THEME["bg_header"])
+        path_f = getattr(self, "_path_bar_frame", None)
+        path_i = getattr(self, "_path_bar_inner", None)
+        if path_f is not None:
+            path_f.configure(bg=THEME["bg_surface"])
+        if path_i is not None:
+            path_i.configure(bg=THEME["bg_surface"])
+        if self.canvas is not None:
+            self.canvas.configure(bg=THEME["canvas_bg"])
+        status_bar = getattr(self, "_status_bar", None)
+        status_label = getattr(self, "_status_label", None)
+        if status_bar is not None:
+            status_bar.configure(bg=THEME["bg_header"])
+        if status_label is not None:
+            status_label.configure(bg=THEME["bg_header"], fg=THEME["text_dim"])
+        mode_frame = getattr(self, "_mode_frame", None)
+        if mode_frame is not None:
+            mode_frame.configure(bg=THEME["bg_header"])
+            for child in mode_frame.winfo_children():
+                child.configure(bg=THEME["bg_header"])
+                for sub in child.winfo_children():
+                    if isinstance(sub, tk.Canvas):
+                        sub.configure(bg=THEME["bg_header"])
+                    elif isinstance(sub, tk.Label):
+                        sub.configure(bg=THEME["bg_header"], fg=THEME["text"])
+        _menu_bg = THEME["bg_header"]
+        _menu_fg = THEME["text"]
+        _menu_afg = THEME.get("menu_active_fg", THEME["text"])
+        _menu_abg = THEME["accent_dim"]
+        menubar = getattr(self, "_menubar", None)
+        if menubar is not None:
+            menubar.configure(bg=_menu_bg, fg=_menu_fg,
+                             activebackground=_menu_abg, activeforeground=_menu_afg)
+        for m in (getattr(self, "_menu_export", None), getattr(self, "_menu_new", None),
+                  getattr(self, "_menu_theme", None)):
+            if m is not None:
+                m.configure(bg=THEME["bg_surface"], fg=_menu_fg,
+                            activebackground=_menu_abg, activeforeground=_menu_afg)
+        self._refresh_path_bar()
+        self._draw_scan_mode_dots()
+        if self._path_stack:
+            _, hierarchy = self._path_stack[-1]
+            self._draw_treemap_from_hierarchy(hierarchy, is_live=False)
+
     def _add_big_dot_radio(self, parent: tk.Frame, text: str, value: str,
                            padx: tuple) -> None:
         """在 parent 中增加一个「大圆点」单选：Canvas 画圆 + Label，可读性更好。"""
@@ -299,7 +381,7 @@ class App(tk.Tk):
             self.mode_var.set(value)
 
         def on_enter(_e: tk.Event) -> None:
-            lbl.config(fg="#ffffff")
+            lbl.config(fg=THEME.get("header_hover_fg", "#ffffff"))
 
         def on_leave(_e: tk.Event) -> None:
             lbl.config(fg=THEME["text"])
@@ -384,7 +466,9 @@ class App(tk.Tk):
         self._scan_mode: str = "fast"
         self._font_cache: dict = {}
         self._block_regions: list = []  # 每块 {rect, full_path, data, label}，绘制顺序追加
-        self._current_view: tuple | None = None  # None=完整结果，(parent_path, sub_hierarchy)=缩放视图
+        self._path_stack: list = []  # [(path, hierarchy), ...]，栈顶为当前视图；空表示无数据
+        self._scan_result_from_import: bool = False  # True 表示当前为导入的 .gfav，不再用磁盘 live 更新
+        self._theme_name: str = "dark"  # "dark" | "light"，供切换主题后重绘
 
         self._update_splash_progress(0.25, "正在创建界面组件...")
 
@@ -392,7 +476,7 @@ class App(tk.Tk):
         _menu_bg = THEME["bg_header"]
         _menu_fg = THEME["text"]
         _menu_abg = THEME["accent_dim"]
-        _menu_afg = THEME["text"]
+        _menu_afg = THEME.get("menu_active_fg", THEME["text"])
         menubar = tk.Menu(
             self, tearoff=0,
             bg=_menu_bg, fg=_menu_fg,
@@ -415,6 +499,12 @@ class App(tk.Tk):
         menu_new.add_command(label="新建一个窗口(W)", command=self._menu_new_window, underline=7)
 
         menubar.add_command(label="关于(A)", command=self._menu_about, underline=3)
+
+        menu_theme = tk.Menu(menubar, tearoff=0, bg=THEME["bg_surface"], fg=_menu_fg,
+                             activebackground=_menu_abg, activeforeground=_menu_afg)
+        menubar.add_cascade(label="切换主题(T)", menu=menu_theme, underline=5)
+        menu_theme.add_command(label="深色主题(D)", command=lambda: self._set_theme("dark"), underline=5)
+        menu_theme.add_command(label="浅色主题(L)", command=lambda: self._set_theme("light"), underline=5)
 
         # Top toolbar
         top_frame = tk.Frame(self, bg=THEME["bg_header"])
@@ -459,16 +549,13 @@ class App(tk.Tk):
             self, mode="determinate", maximum=1000)
         self.progress.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(4, 2))
 
-        # 返回根按钮（仅在缩放视图时显示，不画在画布上以免遮挡块名）
-        self._return_root_frame = tk.Frame(self, bg=THEME["bg_deep"])
-        self._return_root_btn = tk.Button(
-            self._return_root_frame, text="返回根",
-            command=self._go_back_to_root,
-            bg=THEME["accent_dim"], fg=THEME["text"], relief=tk.FLAT,
-            font=("Segoe UI", 9, "bold"), padx=12, pady=4, cursor="hand2",
-        )
-        self._return_root_btn.pack(side=tk.LEFT)
-        # 初始不 pack，由 _update_return_button_visibility 控制
+        # 路径栏（类似资源管理器，单击任意段跳转）
+        self._path_bar_frame = tk.Frame(self, bg=THEME["bg_surface"], height=32)
+        self._path_bar_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(2, 4))
+        self._path_bar_frame.pack_propagate(False)
+        self._path_bar_inner = tk.Frame(self._path_bar_frame, bg=THEME["bg_surface"])
+        self._path_bar_inner.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # 内容由 _refresh_path_bar() 动态填充
 
         # Canvas
         self.canvas = tk.Canvas(
@@ -502,6 +589,16 @@ class App(tk.Tk):
         )
         status_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
                          padx=(14, 14), pady=10)
+
+        # 保存供主题切换时重配置的引用
+        self._menubar = menubar
+        self._menu_export = menu_export
+        self._menu_new = menu_new
+        self._menu_theme = menu_theme
+        self._top_frame = top_frame
+        self._status_bar = status_bar
+        self._status_label = status_label
+        self._mode_frame = mode_frame
 
         # Alt 快捷键
         self.bind("<Alt-s>", lambda e: self.on_scan_clicked())
@@ -641,15 +738,16 @@ class App(tk.Tk):
             return
         try:
             self._scan_result = ScanResult.from_gfav_dict(data)
-            if getattr(self, "_current_view", None) is not None:
-                self._current_view = None
+            self._scan_result_from_import = True
+            self._live_hierarchy = {}
+            self._path_stack = [(self._scan_result.stats.disk_path, self._scan_result.hierarchy)]
             self._draw_treemap_from_hierarchy(self._scan_result.hierarchy, is_live=False)
-            self._update_return_button_visibility()
+            self._refresh_path_bar()
             # 导入后展示扫描时间、导出版本（首行 GFAV\t 后为版本）
             gfav_version = first[5:].strip() if first.startswith("GFAV\t") else ""
             scan_time_str = ""
             if data.get("stats") and data["stats"].get("scan_time"):
-                scan_time_str = data["stats"]["scan_time"]
+                scan_time_str = self._format_import_time(data["stats"]["scan_time"])
             parts = [f"已导入：{self._scan_result.stats.disk_path}"]
             if scan_time_str:
                 parts.append(f"扫描时间：{scan_time_str}")
@@ -816,6 +914,7 @@ class App(tk.Tk):
         self._progress_ratio = 0.0
         self._progress_last_path = ""
         self._progress_phase_message = ""  # MFT 阶段提示，如「正在读取MFT文件表...」
+        self._scan_result_from_import = False
         self._progress_updater_running = True
         self._progress_history = []
         self._last_live_draw = 0.0
@@ -846,7 +945,7 @@ class App(tk.Tk):
         self._progress_updater_running = False
         self.progress["value"] = self.progress["maximum"]
         self._scan_result = result
-        self._current_view = None  # 扫描完成统一回到根视图
+        self._path_stack = [(result.stats.disk_path, result.hierarchy)]
 
         method_text = "MFT加速" if result.scan_method == "mft" else "标准"
         self.info_var.set(
@@ -860,7 +959,7 @@ class App(tk.Tk):
             f"可用: {self._format_size(result.stats.free_size)}")
 
         self._draw_treemap_from_hierarchy(result.hierarchy, is_live=False)
-        self._update_return_button_visibility()
+        self._refresh_path_bar()
 
     def on_scan_failed(self, message: str) -> None:
         self._progress_updater_running = False
@@ -919,9 +1018,10 @@ class App(tk.Tk):
                 f"预计剩余时间：{eta}")
 
         now = time.time()
-        # 若用户已单击缩放，不进行 live 重绘，避免视图被顶回根
+        # 导入的 .gfav 不与当前磁盘同步，不 live 重绘；若用户已单击缩放也不重绘
         if (self._live_hierarchy
-                and getattr(self, "_current_view", None) is None
+                and not getattr(self, "_scan_result_from_import", False)
+                and len(getattr(self, "_path_stack", [])) <= 1
                 and now - self._last_live_draw >= 1.5):
             self._last_live_draw = now
             self._draw_treemap_from_hierarchy(
@@ -962,8 +1062,8 @@ class App(tk.Tk):
         if not hierarchy:
             return
 
-        if self._current_view is not None:
-            path_prefix = self._current_view[0]
+        if self._path_stack:
+            path_prefix = self._path_stack[-1][0]
         else:
             path_prefix = (self._scan_result.stats.disk_path if self._scan_result else "") or ""
 
@@ -1029,7 +1129,6 @@ class App(tk.Tk):
                 text="扫描中...",
                 fill=THEME["accent"],
                 font=("Segoe UI", 9, "bold"))
-        # 返回根已移至顶栏 _return_root_frame，此处不再绘制
         self._return_btn_rect = None
 
     def _draw_block(self, name: str, data: dict,
@@ -1347,9 +1446,9 @@ class App(tk.Tk):
         data = block["data"]
         children = data.get("children") if isinstance(data, dict) else {}
         if isinstance(children, dict) and len(children) > 0:
-            self._current_view = (block["full_path"], children)
+            self._path_stack.append((block["full_path"], children))
             self._draw_treemap_from_hierarchy(children, is_live=False)
-            self._update_return_button_visibility()
+            self._refresh_path_bar()
 
     def _on_canvas_double_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         if self._pending_click_id is not None:
@@ -1382,20 +1481,37 @@ class App(tk.Tk):
                 except Exception:
                     pass
 
-    def _go_back_to_root(self) -> None:
-        self._current_view = None
-        if self._scan_result is not None:
-            self._draw_treemap_from_hierarchy(self._scan_result.hierarchy, is_live=False)
-        self._update_return_button_visibility()
-
-    def _update_return_button_visibility(self) -> None:
-        """根据 _current_view 显示或隐藏顶栏「返回根」按钮。"""
-        if getattr(self, "_return_root_frame", None) is None:
+    def _nav_to_path_index(self, index: int) -> None:
+        """路径栏单击：跳转到第 index 层（0=根）。"""
+        if not self._path_stack or index < 0 or index >= len(self._path_stack):
             return
-        if self._current_view is not None:
-            self._return_root_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 4))
-        else:
-            self._return_root_frame.pack_forget()
+        self._path_stack = self._path_stack[: index + 1]
+        _, hierarchy = self._path_stack[-1]
+        self._draw_treemap_from_hierarchy(hierarchy, is_live=False)
+        self._refresh_path_bar()
+
+    def _refresh_path_bar(self) -> None:
+        """根据 _path_stack 刷新路径栏，每段可单击跳转。"""
+        inner = getattr(self, "_path_bar_inner", None)
+        if inner is None:
+            return
+        for w in inner.winfo_children():
+            w.destroy()
+        if not self._path_stack:
+            return
+        font = ("Segoe UI", 9)
+        for i in range(len(self._path_stack)):
+            path = self._path_stack[i][0]
+            label_text = path if i == 0 else os.path.basename(path.rstrip("\\/")) or path
+            lb = tk.Label(
+                inner, text=label_text,
+                font=font, fg=THEME["accent"], bg=THEME["bg_surface"],
+                cursor="hand2",
+            )
+            lb.pack(side=tk.LEFT)
+            lb.bind("<Button-1>", lambda e, idx=i: self._nav_to_path_index(idx))
+            if i < len(self._path_stack) - 1:
+                tk.Label(inner, text=" > ", font=font, fg=THEME["text_dim"], bg=THEME["bg_surface"]).pack(side=tk.LEFT)
 
     # ── Canvas resize ────────────────────────────────────────────
 
@@ -1410,14 +1526,26 @@ class App(tk.Tk):
 
     def _deferred_redraw(self) -> None:
         self._resize_after_id = None
-        if self._scan_result is not None:
-            hierarchy = (
-                self._current_view[1] if self._current_view is not None
-                else self._scan_result.hierarchy
-            )
+        if self._scan_result is not None and self._path_stack:
+            hierarchy = self._path_stack[-1][1]
             self._draw_treemap_from_hierarchy(hierarchy, is_live=False)
 
     # ── Utility ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _format_import_time(iso_str: str) -> str:
+        """将 ISO 时间字符串格式化为 YYYY-MM-DD HH:MM:SS (时区)。"""
+        if not iso_str:
+            return ""
+        try:
+            d = dt.fromisoformat(iso_str.replace("Z", "+00:00"))
+            time_part = d.strftime("%Y-%m-%d %H:%M:%S")
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=dt.now().astimezone().tzinfo)
+            tz_str = str(d.tzinfo)
+            return f"{time_part} ({tz_str})"
+        except (ValueError, TypeError):
+            return iso_str
 
     @staticmethod
     def _format_size(size: int) -> str:
