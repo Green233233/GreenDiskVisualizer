@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 @echo off
 rem Simple launcher for Green Disk Visualizer (Alpha v0.1.1)
 cd /d "%~dp0"
@@ -22,3 +23,29 @@ if %errorlevel%==0 (
 ) else (
     py main.py
 )
+=======
+@echo off
+rem Simple launcher for Green Disk Visualizer (Alpha v0.1.1)
+cd /d "%~dp0"
+
+rem Prefer pythonw (no console window) over python
+where pythonw >nul 2>nul
+if %errorlevel%==0 (
+    start "" pythonw main.py
+    exit
+)
+
+where pyw >nul 2>nul
+if %errorlevel%==0 (
+    start "" pyw main.py
+    exit
+)
+
+rem Fallback: use python (console may briefly appear, hidden by the app)
+where python >nul 2>nul
+if %errorlevel%==0 (
+    python main.py
+) else (
+    py main.py
+)
+>>>>>>> b2ad4da (test)

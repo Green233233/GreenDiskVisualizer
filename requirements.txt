@@ -1,2 +1,7 @@
+<<<<<<< HEAD
 # 本项目使用 Python 标准库 + Pillow（仅用于导出画布为 PNG）。
 Pillow>=10.0.0
+=======
+# 本项目使用 Python 标准库 + Pillow（仅用于导出画布为 PNG）。
+Pillow>=10.0.0
+>>>>>>> b2ad4da (test)
